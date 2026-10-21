@@ -670,6 +670,25 @@ static void renderOverviewWindowBorder(PHLMONITOR monitor, const PHLWINDOW& wind
     g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
 }
 
+static void renderOverviewSelectionRing(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, bool selected) {
+    if (!selected || !monitor || !window)
+        return;
+
+    // A fixed on-screen width drawn over the window's own outer edge. Scaled with the overview
+    // (about 0.38) it was barely a pixel, and outside the window the tile clip removed it for
+    // windows that fill their tile. The border grows outward from its box, so inset the box.
+    const int WIDTH = std::max(4, sc<int>(std::round(5.F * monitor->m_scale)));
+    CBorderPassElement::SBorderData DATA;
+    DATA.box = windowBox.copy().expand(-WIDTH);
+    DATA.grad1 = Config::CGradientValueData{CHyprColor{169.F / 255.F, 227.F / 255.F, 180.F / 255.F, 1.F}};
+    DATA.round = std::max(0, metrics.roundingPx - WIDTH);
+    DATA.outerRound = metrics.outerRoundPx;
+    DATA.roundingPower = metrics.roundingPower;
+    DATA.a = metrics.targetOpacity;
+    DATA.borderSize = WIDTH;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(DATA));
+}
+
 static void renderOverviewGroupTabIndicators(PHLMONITOR monitor, const PHLWINDOW& window, const CBox& windowBox, const SOverviewWindowMetrics& metrics, float alpha) {
     if (!monitor || !window || !window->m_group || window->m_group->size() < 1)
         return;
@@ -1026,6 +1045,16 @@ void renderOverviewWindow(const SRenderParams& params) {
     if (!usePrecomputedBlur)
         blockOverviewWindowBlurOptimization(params.window, firstWindowPassElement);
     roundStandaloneWindowPassElements(params.window, params.monitor, params.renderScale, firstWindowPassElement);
+    if (params.workspaceBox) {
+        auto& PASSES = g_pHyprRenderer->m_renderPass.m_passElements;
+        for (size_t i = firstWindowPassElement; i < PASSES.size(); ++i) {
+            if (!PASSES[i].element)
+                continue;
+            auto* SURFACE = dc<CSurfacePassElement*>(PASSES[i].element.get());
+            if (SURFACE && SURFACE->m_data.pWindow == params.window)
+                SURFACE->m_data.clipBox = *params.workspaceBox;
+        }
+    }
 
     renderOverviewCustomDecorations(params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_OVER);
     renderOverviewCustomDecorations(params.monitor, params.window, params.workspaceBox ? *params.workspaceBox : CBox{}, params.windowBox, metrics, DECORATION_LAYER_OVERLAY);
@@ -1037,6 +1066,8 @@ void renderOverviewWindow(const SRenderParams& params) {
 
     if (!fullscreen)
         renderOverviewWindowBorder(params.monitor, params.window, params.windowBox, metrics, params.selected);
+    if (!fullscreen)
+        renderOverviewSelectionRing(params.monitor, params.window, params.windowBox, metrics, params.selected);
 
     raiseWindowPopups(params.window, firstWindowPassElement);
     OverviewRender::flushPass(params.monitor);

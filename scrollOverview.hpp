@@ -56,6 +56,10 @@ class CScrollOverview : public IOverview {
     void         reopen() override;
     void         selectHoveredWorkspace() override;
     bool         moveSelection(const std::string& direction) override;
+    // Tab-style cycling: every window (tiled and floating) in reading order, workspace by workspace, wrapping.
+    bool         cycleSelection(bool forward);
+    void         toggleLayout();
+    bool         activateCompassSlot();
     bool         windowDispatcherAction(const std::string& action) override;
 
     void         fullRender() override;
@@ -80,6 +84,7 @@ class CScrollOverview : public IOverview {
     };
 
     void       close(ECloseMode mode);
+    PHLWORKSPACE createCompassWorkspace();
     void   rebuildWorkspaceImages();
     void   seedRememberedSelections();
     void   redrawAll(bool forcelowres = false);
@@ -110,8 +115,8 @@ class CScrollOverview : public IOverview {
     size_t dragWorkspaceIndex(PHLWINDOW window) const;
     void   updateWorkspaceOverflow();
     CBox   workspaceOverviewVisibleBox(size_t workspaceIdx, const CBox& workspaceBox, float renderScale, PHLMONITOR monitor) const;
-    float      workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const;
-    float      workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const;
+    Vector2D   workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const;
+    Vector2D   workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const;
     float      workspaceOverviewAlpha(size_t workspaceIdx) const;
     PHLWINDOW windowAtOverviewPoint(const Vector2D& point, size_t* workspaceIdx = nullptr) const;
     PHLWINDOW windowAtOverviewCursor(size_t* workspaceIdx = nullptr);
@@ -199,9 +204,9 @@ class CScrollOverview : public IOverview {
         bool                             active              = false;
         WORKSPACEID                      transitionWorkspaceID = WORKSPACE_INVALID;
         bool                             transitionFadeIn   = true;
-        std::unordered_map<WORKSPACEID, float> oldRelativeOffsets;
-        std::unordered_map<WORKSPACEID, float> newRelativeOffsets;
-        float                            transitionOldRelativeOffset = 0.F;
+        std::unordered_map<WORKSPACEID, Vector2D> oldRelativeOffsets;
+        std::unordered_map<WORKSPACEID, Vector2D> newRelativeOffsets;
+        Vector2D                         transitionOldRelativeOffset = Vector2D{};
     };
 
     Vector2D                         lastMousePosLocal = Vector2D{}; // monitor-local pixel space
@@ -262,6 +267,7 @@ class CScrollOverview : public IOverview {
     SWorkspaceInsertTransition       workspaceInsertTransition;
     PHLWORKSPACEREF                  pendingRemovedWorkspace;
     ScrollOverview::Config::ELayout  layout = ScrollOverview::Config::ELayout::VERTICAL;
+    bool                             compassSlotSelected = false;
 
     struct SForcedSurfaceVisibility {
         WP<CWLSurfaceResource> surface;

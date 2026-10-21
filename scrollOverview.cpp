@@ -234,10 +234,14 @@ static bool isPointerOnTopLayer(PHLMONITOR monitor) {
     Vector2D   surfaceCoords;
     PHLLS      layerSurface;
 
-    if (Desktop::viewState()->hitTest().layerSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords, &layerSurface))
+    // A layer hidden by hide_layers is not drawn, so it must not take the pointer.
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords, &layerSurface) &&
+        !(layerSurface && ScrollOverview::Config::isLayerHidden(monitor, layerSurface->m_namespace)))
         return true;
 
-    return !!Desktop::viewState()->hitTest().layerSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &layerSurface);
+    layerSurface.reset();
+    return Desktop::viewState()->hitTest().layerSurfaceAt(MOUSECOORDS, &monitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &layerSurface) &&
+        !(layerSurface && ScrollOverview::Config::isLayerHidden(monitor, layerSurface->m_namespace));
 }
 
 static PHLWINDOW getOverviewWindowToShow(const PHLWINDOW& window) {
@@ -323,25 +327,25 @@ static bool layerHasOverviewAnimation(const PHLLS& layer) {
 
 static Vector2D axisOffsetVector(float offset, ScrollOverview::Config::ELayout layout);
 
-static CBox getOverviewBox(CBox box, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+static CBox getOverviewBox(CBox box, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset, ScrollOverview::Config::ELayout layout,
                            bool round = true) {
     const auto MONITORSCALE    = monitor->m_scale;
     const auto VIEWPORT_CENTER = CBox{{}, monitor->m_size * MONITORSCALE}.middle();
 
     box = {box.pos() * MONITORSCALE, box.size() * MONITORSCALE};
-    box.translate(-VIEWPORT_CENTER).scale(scale).translate(VIEWPORT_CENTER).translate(-viewOffset * scale * MONITORSCALE).translate(axisOffsetVector(offset, layout));
+    box.translate(-VIEWPORT_CENTER).scale(scale).translate(VIEWPORT_CENTER).translate(-viewOffset * scale * MONITORSCALE).translate(offset);
     if (round)
         box.round();
 
     return box;
 }
 
-static CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+static CBox getOverviewGlobalBox(CBox globalBox, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset, ScrollOverview::Config::ELayout layout,
                                  bool round = true) {
     return getOverviewBox({globalBox.pos() - monitor->m_position, globalBox.size()}, monitor, scale, viewOffset, offset, layout, round);
 }
 
-static CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+static CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset, ScrollOverview::Config::ELayout layout,
                                  bool round = true) {
     if (!window)
         return {};
@@ -349,7 +353,7 @@ static CBox getOverviewWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, fl
     return getOverviewGlobalBox(window->geometricBox(Desktop::View::IGeometric::GEOMETRIC_CURRENT), monitor, scale, viewOffset, offset, layout, round);
 }
 
-static CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout,
+static CBox getOverviewDragWindowBox(const PHLWINDOW& window, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset, ScrollOverview::Config::ELayout layout,
                                      bool round = true) {
     if (!window)
         return {};
@@ -405,7 +409,7 @@ static float axisSize(const Vector2D& size, ScrollOverview::Config::ELayout layo
     return layout == ScrollOverview::Config::ELayout::HORIZONTAL ? size.x : size.y;
 }
 
-static CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset, ScrollOverview::Config::ELayout layout) {
+static CBox getOverviewWorkspaceBox(PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset, ScrollOverview::Config::ELayout layout) {
     return getOverviewBox({{}, monitor->m_size}, monitor, scale, viewOffset, offset, layout);
 }
 
@@ -720,6 +724,27 @@ static void renderOverviewWorkspaceShadow(PHLMONITOR monitor, const CBox& worksp
     }));
 }
 
+static int getCompassTileRadius(PHLMONITOR monitor, float renderScale) {
+    return sc<int>(std::round(ScrollOverview::Config::getTileRadius(monitor) * renderScale * (monitor ? monitor->m_scale : 1.F)));
+}
+
+static void renderCompassTileOutline(PHLMONITOR monitor, const CBox& box, float renderScale, float alpha = 1.F) {
+    if (!monitor || box.empty())
+        return;
+
+    CRectPassElement::SRectData outline;
+    outline.box = box;
+    outline.color = CHyprColor{1.F, 1.F, 1.F, 0.28F * std::clamp(alpha, 0.F, 1.F)};
+    outline.round = getCompassTileRadius(monitor, renderScale);
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(outline));
+
+    CRectPassElement::SRectData fill;
+    fill.box = box.copy().expand(-2);
+    fill.color = CHyprColor{6.F / 255.F, 8.F / 255.F, 7.F / 255.F, 0.45F * std::clamp(alpha, 0.F, 1.F)};
+    fill.round = std::max(0, getCompassTileRadius(monitor, renderScale) - 2);
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(fill));
+}
+
 static float getWorkspaceRenderedPitch(PHLMONITOR monitor, float scale, ScrollOverview::Config::ELayout layout) {
     return (axisSize(monitor->m_size, layout) * scale + sc<float>(ScrollOverview::Config::getWorkspaceGap(monitor))) * monitor->m_scale;
 }
@@ -812,7 +837,7 @@ static Vector2D overviewScrollingCameraTranslation(Layout::Tiled::CScrollingAlgo
     return CONTROLLER->isPrimaryHorizontal() ? Vector2D{TRANSLATION, 0.F} : Vector2D{0.F, TRANSLATION};
 }
 
-static CBox getOverviewWorkspaceUsableBox(const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, float offset,
+static CBox getOverviewWorkspaceUsableBox(const PHLWORKSPACE& workspace, PHLMONITOR monitor, float scale, const Vector2D& viewOffset, const Vector2D& offset,
                                           ScrollOverview::Config::ELayout layout) {
     if (!workspace || !monitor)
         return {};
@@ -1629,11 +1654,14 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             return;
 
         const auto KEYSYM = getOverviewKeysym(event);
-        if (activeScrollOverview().get() != this || isTopLayerFocused(pMonitor.lock()))
+        const bool COMPASSARROW = layout == ScrollOverview::Config::ELayout::COMPASS &&
+            (KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right || KEYSYM == XKB_KEY_KP_Right ||
+             KEYSYM == XKB_KEY_Up || KEYSYM == XKB_KEY_KP_Up || KEYSYM == XKB_KEY_Down || KEYSYM == XKB_KEY_KP_Down);
+        if (activeScrollOverview().get() != this || (isTopLayerFocused(pMonitor.lock()) && !COMPASSARROW))
             return;
         const auto MODS   = g_pInputManager->getModsFromAllKBs() & ~(HL_MODIFIER_CAPS | HL_MODIFIER_MOD2);
 
-        if ((KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter || KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right ||
+        if (!COMPASSARROW && (KEYSYM == XKB_KEY_Return || KEYSYM == XKB_KEY_KP_Enter || KEYSYM == XKB_KEY_Left || KEYSYM == XKB_KEY_KP_Left || KEYSYM == XKB_KEY_Right ||
              KEYSYM == XKB_KEY_KP_Right || KEYSYM == XKB_KEY_Up || KEYSYM == XKB_KEY_KP_Up || KEYSYM == XKB_KEY_Down || KEYSYM == XKB_KEY_KP_Down) &&
             MODS != 0)
             return;
@@ -1655,8 +1683,37 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
             case XKB_KEY_KP_Down:
                 moveSelection("down");
                 break;
+            case XKB_KEY_g:
+            case XKB_KEY_G:
+                // Alt is allowed: in the hold-Alt-and-Tab flow it is still down when G is pressed,
+                // and releasing it first would close the overview.
+                if ((MODS & ~(HL_MODIFIER_SHIFT | HL_MODIFIER_CAPS | HL_MODIFIER_MOD2 | HL_MODIFIER_ALT)) != 0)
+                    return;
+                toggleLayout();
+                break;
+            // Tab, Alt+Tab (hold Alt, tap Tab) and their Shift variants step through windows.
+            case XKB_KEY_Tab:
+                if ((MODS & ~(HL_MODIFIER_SHIFT | HL_MODIFIER_ALT)) != 0)
+                    return;
+                cycleSelection(!(MODS & HL_MODIFIER_SHIFT));
+                break;
+            case XKB_KEY_ISO_Left_Tab:
+                if ((MODS & ~(HL_MODIFIER_SHIFT | HL_MODIFIER_ALT)) != 0)
+                    return;
+                cycleSelection(false);
+                break;
+            case XKB_KEY_Escape:
+                if (MODS != 0)
+                    return;
+                closeAll();
+                break;
             case XKB_KEY_Return:
-            case XKB_KEY_KP_Enter: closeAll(); break;
+            case XKB_KEY_KP_Enter:
+                if (compassSlotSelected)
+                    activateCompassSlot();
+                else
+                    closeAll();
+                break;
             default: return;
         }
 
@@ -1698,7 +1755,8 @@ CScrollOverview::CScrollOverview(PHLWORKSPACE startedOn_, bool swipe_, PHLMONITO
     syncSelectionToViewport();
 }
 
-static void renderOverviewLayerLevel(PHLMONITOR monitor, uint32_t layer, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F) {
+static void renderOverviewLayerLevel(PHLMONITOR monitor, uint32_t layer, const CBox& workspaceBox, float renderScale, const Time::steady_tp& now, float alpha = 1.F,
+                                     int tileRounding = 0) {
     if (!monitor)
         return;
 
@@ -1707,7 +1765,7 @@ static void renderOverviewLayerLevel(PHLMONITOR monitor, uint32_t layer, const C
 
     for (auto const& ls : monitor->m_layerSurfaceLayers[layer]) {
         const auto LAYER = ls.lock();
-        if (!Desktop::View::validMapped(LAYER))
+        if (!Desktop::View::validMapped(LAYER) || ScrollOverview::Config::isLayerHidden(monitor, LAYER->m_namespace))
             continue;
 
         if (!pushedRenderHints) {
@@ -1726,7 +1784,23 @@ static void renderOverviewLayerLevel(PHLMONITOR monitor, uint32_t layer, const C
             lsAlpha->setValueAndWarp(previousAlpha * std::clamp(alpha, 0.F, 1.F));
         }
 
+        const size_t FIRSTPASS = g_pHyprRenderer->m_renderPass.m_passElements.size();
         g_pHyprRenderer->renderLayer(LAYER, monitor, now);
+        if (tileRounding > 0) {
+            auto& PASSES = g_pHyprRenderer->m_renderPass.m_passElements;
+            for (size_t i = FIRSTPASS; i < PASSES.size(); ++i) {
+                if (!PASSES[i].element)
+                    continue;
+                if (auto* SURFACE = dc<CSurfacePassElement*>(PASSES[i].element.get())) {
+                    SURFACE->m_data.dontRound = false;
+                    SURFACE->m_data.rounding = tileRounding;
+                    SURFACE->m_data.roundingPower = 2.F;
+                } else if (auto* TEXTURE = dc<CTexPassElement*>(PASSES[i].element.get())) {
+                    TEXTURE->m_data.round = tileRounding;
+                    TEXTURE->m_data.roundingPower = 2.F;
+                }
+            }
+        }
 
         if (MODULATEALPHA && lsAlpha->value())
             lsAlpha->setValueAndWarp(previousAlpha);
@@ -1740,7 +1814,8 @@ void CScrollOverview::renderWallpaperLayers(PHLMONITOR monitor, const CBox& work
     if (!monitor)
         return;
 
-    renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, workspaceBox, renderScale, now, alpha);
+    const int ROUNDING = layout == ScrollOverview::Config::ELayout::COMPASS ? getCompassTileRadius(monitor, renderScale) : 0;
+    renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, workspaceBox, renderScale, now, alpha, ROUNDING);
 }
 
 // Separable box blur with a sliding-window running sum: O(W*H) per axis,
@@ -2076,7 +2151,7 @@ bool CScrollOverview::isSelectedWorkspace(const PHLWORKSPACE& workspace) const {
         images[viewportCurrentWorkspace]->pWorkspace == workspace;
 }
 
-float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
+Vector2D CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
     const auto MONITOR             = pMonitor.lock();
     const auto MONITORSCALE        = MONITOR ? std::max(MONITOR->m_scale, 0.01F) : 1.F;
     const auto MONITORSIZE         = MONITOR ? axisSize(MONITOR->m_size, layout) : 0.F;
@@ -2096,17 +2171,27 @@ float CScrollOverview::workspaceOverviewOffset(size_t workspaceIdx, size_t activ
         return DEFAULTOFFSET;
 
     const float T         = std::clamp(workspaceInsertProgress->value(), 0.F, 1.F);
-    const float NEWOFFSET = NEWIT->second * RENDEREDLOGICALUNIT;
+    const Vector2D NEWOFFSET = NEWIT->second * RENDEREDLOGICALUNIT;
 
     if (const auto OLDIT = workspaceInsertTransition.oldRelativeOffsets.find(WORKSPACEID); OLDIT != workspaceInsertTransition.oldRelativeOffsets.end()) {
-        const float OLDOFFSET = OLDIT->second * RENDEREDLOGICALUNIT;
+        const Vector2D OLDOFFSET = OLDIT->second * RENDEREDLOGICALUNIT;
         return OLDOFFSET + (NEWOFFSET - OLDOFFSET) * T;
     }
 
     return NEWOFFSET;
 }
 
-float CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
+Vector2D CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_t activeIdx, float workspacePitch) const {
+    if (layout == ScrollOverview::Config::ELayout::COMPASS) {
+        const auto MONITOR = pMonitor.lock();
+        const size_t columns = ScrollOverview::Config::getCompassColumns(MONITOR) > 0 ?
+            sc<size_t>(ScrollOverview::Config::getCompassColumns(MONITOR)) : (images.size() <= 4 ? 2 : 3);
+        const auto pitch = MONITOR ? MONITOR->m_size + Vector2D{sc<double>(ScrollOverview::Config::getWorkspaceGap(MONITOR)),
+                                                               sc<double>(ScrollOverview::Config::getWorkspaceGap(MONITOR))} / std::max(scale->value(), 0.01F) : Vector2D{workspacePitch, workspacePitch};
+        const Vector2D current{sc<double>(activeIdx % columns) * pitch.x, sc<double>(activeIdx / columns) * pitch.y};
+        const Vector2D target{sc<double>(workspaceIdx % columns) * pitch.x, sc<double>(workspaceIdx / columns) * pitch.y};
+        return target - current;
+    }
     const auto EXTRAINTERVAL = [this](size_t workspaceIdx_) -> float {
         if (workspaceIdx_ + 1 >= images.size() || !images[workspaceIdx_] || !images[workspaceIdx_ + 1])
             return 0.F;
@@ -2127,7 +2212,7 @@ float CScrollOverview::workspaceOverviewLogicalOffset(size_t workspaceIdx, size_
             offset -= workspacePitch + EXTRAINTERVAL(i);
     }
 
-    return offset;
+    return axisOffsetVector(offset, layout);
 }
 
 float CScrollOverview::workspaceOverviewAlpha(size_t workspaceIdx) const {
@@ -2740,6 +2825,25 @@ bool CScrollOverview::selectWindowAtOverviewCursor(bool syncFocus) {
 void CScrollOverview::selectHoveredWorkspace() {
     lastMousePosLocal = getOverviewMousePosLocal(pMonitor.lock());
 
+    if (compassSlotSelected) {
+        activateCompassSlot();
+        return;
+    }
+
+    if (layout == ScrollOverview::Config::ELayout::COMPASS && ScrollOverview::Config::getEmptySlot(pMonitor.lock())) {
+        const auto MONITOR = pMonitor.lock();
+        if (MONITOR) {
+            const auto ACTIVEIDX = activeWorkspaceIndex();
+            const auto SLOTBOX = getOverviewWorkspaceBox(MONITOR, scale->value(), viewOffset->value(),
+                workspaceOverviewOffset(images.size(), ACTIVEIDX, getWorkspaceRenderedPitch(MONITOR, scale->value(), layout)), layout);
+            if (SLOTBOX.containsPoint(lastMousePosLocal)) {
+                compassSlotSelected = true;
+                activateCompassSlot();
+                return;
+            }
+        }
+    }
+
     size_t     workspaceIdx = viewportCurrentWorkspace;
     const auto WORKSPACE    = workspaceAtOverviewCursor(&workspaceIdx);
     if (!WORKSPACE)
@@ -2789,7 +2893,7 @@ Vector2D CScrollOverview::overviewPointToGlobal(size_t workspaceIdx, const Vecto
     const auto  VIEWPORT_CENTER_LOGICAL = CBox{{}, MONITOR->m_size}.middle();
     const auto  WORKSPACE_OFFSET   = workspaceOverviewOffset(workspaceIdx, activeWorkspaceIndex(), getWorkspaceRenderedPitch(MONITOR, scale->value(), layout));
 
-    return ((pointLocal - axisOffsetVector(WORKSPACE_OFFSET, layout) + viewOffset->value() * scale->value() * SAFE_MON_SCALE - VIEWPORT_CENTER) * (1.F / (SAFE_SCALE * SAFE_MON_SCALE))) +
+    return ((pointLocal - WORKSPACE_OFFSET + viewOffset->value() * scale->value() * SAFE_MON_SCALE - VIEWPORT_CENTER) * (1.F / (SAFE_SCALE * SAFE_MON_SCALE))) +
         VIEWPORT_CENTER_LOGICAL + MONITOR->m_position;
 }
 
@@ -3486,7 +3590,23 @@ void CScrollOverview::endWindowDrag() {
     const auto          DROPPOINTLOCAL    = getOverviewMousePosLocal(DROPMONITOR);
     const bool          RETILEONEND       = dragStartedTiled && TARGET && SPACE && ALGO;
     size_t              dropWorkspaceIdx  = 0;
-    const auto          DROPWORKSPACE     = dropOverview ? dropOverview->workspaceAtOverviewDropPoint(DROPPOINTLOCAL, &dropWorkspaceIdx, WINDOW) : PHLWORKSPACE{};
+    auto                DROPWORKSPACE     = dropOverview ? dropOverview->workspaceAtOverviewDropPoint(DROPPOINTLOCAL, &dropWorkspaceIdx, WINDOW) : PHLWORKSPACE{};
+    if (!DROPWORKSPACE && dropOverview && dropOverview->layout == ScrollOverview::Config::ELayout::COMPASS &&
+        ScrollOverview::Config::getEmptySlot(DROPMONITOR)) {
+        const auto SLOTBOX = getOverviewWorkspaceBox(DROPMONITOR, dropOverview->scale->value(), dropOverview->viewOffset->value(),
+            dropOverview->workspaceOverviewOffset(dropOverview->images.size(), dropOverview->activeWorkspaceIndex(),
+                getWorkspaceRenderedPitch(DROPMONITOR, dropOverview->scale->value(), dropOverview->layout)), dropOverview->layout);
+        if (SLOTBOX.containsPoint(DROPPOINTLOCAL)) {
+            DROPWORKSPACE = dropOverview->createCompassWorkspace();
+            if (DROPWORKSPACE) {
+                for (size_t i = 0; i < dropOverview->images.size(); ++i)
+                    if (dropOverview->images[i] && dropOverview->images[i]->pWorkspace == DROPWORKSPACE) {
+                        dropWorkspaceIdx = i;
+                        break;
+                    }
+            }
+        }
+    }
     const auto          DROPSCROLLINGALGO  = overviewScrollingAlgorithmForWorkspace(DROPWORKSPACE);
     const bool          DROPSCROLLINGLAYOUT = DROPSCROLLINGALGO != nullptr;
     const bool          DROPSCROLLINGPRIMARYHORIZONTAL =
@@ -3802,7 +3922,7 @@ double CScrollOverview::trackpadWorkspaceScrollOffset(PHLMONITOR monitor, float 
         if (!images[i] || !images[i]->pWorkspace)
             continue;
 
-        const double WORKSPACEOFFSET = workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, LOGICALPITCH);
+        const double WORKSPACEOFFSET = axisValue(workspaceOverviewLogicalOffset(i, viewportCurrentWorkspace, LOGICALPITCH), layout);
         minOffset                    = std::min(minOffset, WORKSPACEOFFSET);
         maxOffset                    = std::max(maxOffset, WORKSPACEOFFSET);
     }
@@ -3854,7 +3974,7 @@ void CScrollOverview::finishWorkspaceScrollFollow() {
     }
 
     const double OFFSET       = axisValue(viewOffset->value(), layout);
-    const double TARGETOFFSET = workspaceOverviewLogicalOffset(targetIdx, viewportCurrentWorkspace, LOGICALPITCH);
+    const double TARGETOFFSET = axisValue(workspaceOverviewLogicalOffset(targetIdx, viewportCurrentWorkspace, LOGICALPITCH), layout);
 
     trackpadGestureSettleOffset  = OFFSET - TARGETOFFSET;
     trackpadGestureSettlePending = true;
@@ -3960,6 +4080,125 @@ size_t CScrollOverview::dragWorkspaceIndex(PHLWINDOW window) const {
     return images.size();
 }
 
+bool CScrollOverview::cycleSelection(bool forward) {
+    compassSlotSelected = false;
+    struct SStop {
+        size_t    workspaceIdx;
+        PHLWINDOW window;
+    };
+    std::vector<SStop> stops;
+
+    for (size_t workspaceIdx = 0; workspaceIdx < images.size(); ++workspaceIdx) {
+        const auto& IMAGE = images[workspaceIdx];
+        if (!IMAGE || !IMAGE->pWorkspace)
+            continue;
+
+        std::vector<PHLWINDOW> windows;
+        for (const auto& windowRef : IMAGE->windows) {
+            const auto WINDOW = getOverviewWindowToShow(windowRef.lock());
+            if (!shouldShowOverviewWindow(WINDOW) || WINDOW->m_workspace != IMAGE->pWorkspace || WINDOW->m_monitor != pMonitor)
+                continue;
+            if (std::ranges::find(windows, WINDOW) == windows.end())
+                windows.push_back(WINDOW);
+        }
+
+        // reading order: left to right, then top to bottom
+        std::ranges::sort(windows, [](const PHLWINDOW& a, const PHLWINDOW& b) {
+            const auto A = a->middle(), B = b->middle();
+            return std::abs(A.x - B.x) > 0.5 ? A.x < B.x : A.y < B.y;
+        });
+
+        for (const auto& window : windows)
+            stops.push_back({workspaceIdx, window});
+    }
+
+    if (stops.empty())
+        return false;
+
+    const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
+    size_t     target  = stops.size();
+    for (size_t i = 0; i < stops.size(); ++i) {
+        if (stops[i].window == CURRENT) {
+            target = forward ? (i + 1) % stops.size() : (i + stops.size() - 1) % stops.size();
+            break;
+        }
+    }
+
+    // nothing selected yet: start from the workspace in view
+    if (target == stops.size()) {
+        target = forward ? 0 : stops.size() - 1;
+        for (size_t i = 0; i < stops.size(); ++i) {
+            const size_t IDX = forward ? i : stops.size() - 1 - i;
+            if (stops[IDX].workspaceIdx == viewportCurrentWorkspace) {
+                target = IDX;
+                break;
+            }
+        }
+    }
+
+    const auto& STOP = stops[target];
+    if (STOP.workspaceIdx != viewportCurrentWorkspace) {
+        viewportCurrentWorkspace = STOP.workspaceIdx;
+        const auto& IMAGE        = images[viewportCurrentWorkspace];
+        if (pMonitor && IMAGE && IMAGE->pWorkspace && pMonitor->m_activeWorkspace != IMAGE->pWorkspace)
+            pMonitor->changeWorkspace(IMAGE->pWorkspace, false, true, true);
+    }
+
+    closeOnWindow = STOP.window;
+    rememberSelection(STOP.window);
+    syncFocusedSelection();
+    damage();
+    return true;
+}
+
+void CScrollOverview::toggleLayout() {
+    if (closing || (layout != ScrollOverview::Config::ELayout::COMPASS && layout != ScrollOverview::Config::ELayout::VERTICAL))
+        return;
+    layout = layout == ScrollOverview::Config::ELayout::COMPASS ? ScrollOverview::Config::ELayout::VERTICAL : ScrollOverview::Config::ELayout::COMPASS;
+    compassSlotSelected = false;
+    viewOffset->setValueAndWarp(Vector2D{});
+    *viewOffset = Vector2D{};
+    damage();
+}
+
+bool CScrollOverview::activateCompassSlot() {
+    if (!createCompassWorkspace())
+        return false;
+    closeAll();
+    return true;
+}
+
+PHLWORKSPACE CScrollOverview::createCompassWorkspace() {
+    const auto MONITOR = pMonitor.lock();
+    if (layout != ScrollOverview::Config::ELayout::COMPASS || !ScrollOverview::Config::getEmptySlot(MONITOR) || !MONITOR || !g_pKeybindManager)
+        return {};
+    WORKSPACEID nextID = 1;
+    for (const auto& image : images)
+        if (image && image->pWorkspace)
+            nextID = std::max(nextID, image->pWorkspace->m_id + 1);
+    const auto DISPATCH = g_pKeybindManager->m_dispatchers.find("workspace");
+    if (DISPATCH == g_pKeybindManager->m_dispatchers.end())
+        return {};
+    const auto RESULT = DISPATCH->second(std::to_string(nextID));
+    if (!RESULT.success)
+        return {};
+    redrawAll();
+    PHLWORKSPACE createdWorkspace;
+    for (size_t i = 0; i < images.size(); ++i) {
+        if (images[i] && images[i]->pWorkspace && images[i]->pWorkspace->m_id == nextID) {
+            viewportCurrentWorkspace = i;
+            createdWorkspace = images[i]->pWorkspace;
+            break;
+        }
+    }
+    if (!createdWorkspace)
+        return {};
+    startedOn = createdWorkspace;
+    closeOnWindow.reset();
+    compassSlotSelected = false;
+    return createdWorkspace;
+}
+
 bool CScrollOverview::moveSelection(const std::string& direction) {
     const bool MOVINGLEFT  = direction == "left";
     const bool MOVINGRIGHT = direction == "right";
@@ -3968,6 +4207,47 @@ bool CScrollOverview::moveSelection(const std::string& direction) {
 
     if (!MOVINGLEFT && !MOVINGRIGHT && !MOVINGUP && !MOVINGDOWN)
         return false;
+
+    if (layout == ScrollOverview::Config::ELayout::COMPASS) {
+        const auto MONITOR = pMonitor.lock();
+        if (!MONITOR || images.empty())
+            return false;
+        const size_t COLUMNS = ScrollOverview::Config::getCompassColumns(MONITOR) > 0 ?
+            sc<size_t>(ScrollOverview::Config::getCompassColumns(MONITOR)) : (images.size() <= 4 ? 2 : 3);
+        const size_t CURRENTINDEX = compassSlotSelected ? images.size() : viewportCurrentWorkspace;
+        const size_t SLOTCOUNT = ScrollOverview::Config::getEmptySlot(MONITOR) ? 1 : 0;
+        const size_t TOTAL = images.size() + SLOTCOUNT;
+        if (CURRENTINDEX >= TOTAL)
+            return false;
+        const size_t COLUMN = CURRENTINDEX % COLUMNS;
+        const size_t ROW = CURRENTINDEX / COLUMNS;
+        std::optional<size_t> TARGET;
+        if (MOVINGLEFT && COLUMN > 0) TARGET = CURRENTINDEX - 1;
+        else if (MOVINGRIGHT && COLUMN + 1 < COLUMNS && CURRENTINDEX + 1 < TOTAL) TARGET = CURRENTINDEX + 1;
+        else if (MOVINGUP && ROW > 0) TARGET = CURRENTINDEX - COLUMNS;
+        else if (MOVINGDOWN && CURRENTINDEX + COLUMNS < TOTAL) TARGET = CURRENTINDEX + COLUMNS;
+        if (!TARGET)
+            return false;
+        if (*TARGET == images.size()) {
+            compassSlotSelected = true;
+            const auto SLOT = workspaceOverviewLogicalOffset(images.size(), activeWorkspaceIndex(), getWorkspaceLogicalPitch(MONITOR, scale->value(), layout));
+            viewOffset->setValueAndWarp(viewOffset->value());
+            *viewOffset = SLOT;
+            closeOnWindow.reset();
+        } else {
+            compassSlotSelected = false;
+            viewportCurrentWorkspace = *TARGET;
+            const auto& IMAGE = images[*TARGET];
+            if (IMAGE && IMAGE->pWorkspace && MONITOR->m_activeWorkspace != IMAGE->pWorkspace)
+                MONITOR->changeWorkspace(IMAGE->pWorkspace, false, true, true);
+            else {
+                if (const auto it = rememberedSelection.find(IMAGE->pWorkspace->m_id); it != rememberedSelection.end())
+                    closeOnWindow = it->second.lock();
+            }
+        }
+        damage();
+        return true;
+    }
 
     bool shouldMoveWorkspace = images.empty() || viewportCurrentWorkspace >= images.size();
 
@@ -4475,7 +4755,11 @@ void CScrollOverview::renderWorkspaceBackground(PHLMONITOR monitor, size_t works
         renderWallpaperLayers(monitor, WORKSPACEBOX, renderScale, now, WORKSPACEALPHA);
 
     if (WORKSPACEALPHA >= 0.999F)
-        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, WORKSPACEBOX, renderScale, now);
+        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, WORKSPACEBOX, renderScale, now, 1.F,
+                                 layout == ScrollOverview::Config::ELayout::COMPASS ? getCompassTileRadius(monitor, renderScale) : 0);
+
+    if (layout == ScrollOverview::Config::ELayout::COMPASS)
+        renderCompassTileOutline(monitor, WORKSPACEBOX, renderScale, WORKSPACEALPHA);
 }
 
 void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceIdx, size_t activeIdx, float workspacePitch, float renderScale, int wallpaperMode, const Time::steady_tp& now) {
@@ -4506,9 +4790,10 @@ void CScrollOverview::renderWorkspaceLive(PHLMONITOR monitor, size_t workspaceId
     // screen. Via a scope guard so it also covers the fullscreen-workspace
     // early return below (Super+D and similar) — without it, a workspace with
     // a fullscreen window would skip the in-card bar render entirely.
-    auto renderShellLayersOnExit = Hyprutils::Utils::CScopeGuard([monitor, WORKSPACEBOX, renderScale, now] {
-        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_TOP, WORKSPACEBOX, renderScale, now);
-        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, WORKSPACEBOX, renderScale, now);
+    auto renderShellLayersOnExit = Hyprutils::Utils::CScopeGuard([this, monitor, WORKSPACEBOX, renderScale, now] {
+        const int ROUNDING = layout == ScrollOverview::Config::ELayout::COMPASS ? getCompassTileRadius(monitor, renderScale) : 0;
+        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_TOP, WORKSPACEBOX, renderScale, now, 1.F, ROUNDING);
+        renderOverviewLayerLevel(monitor, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, WORKSPACEBOX, renderScale, now, 1.F, ROUNDING);
     });
 
     const auto renderOverviewWindow = [&](const PHLWINDOW& window) {
@@ -4941,7 +5226,7 @@ bool CScrollOverview::shouldSuppressRenderDamage() const {
     const auto PITCH     = getWorkspaceRenderedPitch(MONITOR, SCALE, layout);
     const auto DRAGGED   = getOverviewWindowToShow(dragActiveWindow.lock());
 
-    const auto isVisibleAnimatedWindow = [&](const PHLWINDOW& window, float workspaceOffset) {
+    const auto isVisibleAnimatedWindow = [&](const PHLWINDOW& window, const Vector2D& workspaceOffset) {
         if (!shouldShowOverviewWindow(window) || window == DRAGGED)
             return false;
 
@@ -5019,7 +5304,7 @@ void CScrollOverview::sendOverviewFrameCallbacks(const Time::steady_tp& now) {
     sendingOverviewFrameCallbacks        = CANFRAMETHROTTLEDWINDOWS;
     auto resetSendingFrameCallbacks      = Hyprutils::Utils::CScopeGuard([this, PREVSENDINGFRAMECALLBACKS] { sendingOverviewFrameCallbacks = PREVSENDINGFRAMECALLBACKS; });
 
-    const auto frameWindow = [&](const PHLWINDOW& window, float workspaceOffset, bool realtime) {
+    const auto frameWindow = [&](const PHLWINDOW& window, const Vector2D& workspaceOffset, bool realtime) {
         if (!shouldShowOverviewWindow(window))
             return;
 
@@ -5387,7 +5672,7 @@ void CScrollOverview::close(ECloseMode mode) {
             viewportCurrentWorkspace = targetIdx;
 
             const auto FINALPITCH = getWorkspaceLogicalPitch(pMonitor.lock(), 1.F, layout);
-            viewOffset->setValueAndWarp(axisOffsetVector(workspaceOverviewLogicalOffset(sourceIdx, targetIdx, FINALPITCH), layout));
+            viewOffset->setValueAndWarp(workspaceOverviewLogicalOffset(sourceIdx, targetIdx, FINALPITCH));
             *viewOffset = Vector2D{};
 
             focusSyncedFromWorkspaceID = WORKSPACE_INVALID;
@@ -5407,7 +5692,7 @@ void CScrollOverview::close(ECloseMode mode) {
             if (!images[workspaceIdx] || images[workspaceIdx]->pWorkspace != SELECTEDWORKSPACE)
                 continue;
 
-            *viewOffset = axisOffsetVector(workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH), layout);
+            *viewOffset = workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH);
             break;
         }
 
@@ -5422,7 +5707,7 @@ void CScrollOverview::close(ECloseMode mode) {
                 if (!images[workspaceIdx] || !images[workspaceIdx]->pWorkspace || images[workspaceIdx]->pWorkspace->m_id != focusSyncedFromWorkspaceID)
                     continue;
 
-                viewOffset->setValueAndWarp(axisOffsetVector(workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH), layout));
+                viewOffset->setValueAndWarp(workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH));
                 break;
             }
         }
@@ -5445,7 +5730,7 @@ void CScrollOverview::close(ECloseMode mode) {
             for (const auto& windowRef : wimg->windows) {
                 const auto window = getOverviewWindowToShow(windowRef.lock());
                 if (window == selectedWindow && window) {
-                    *viewOffset = axisOffsetVector(workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH), layout);
+                    *viewOffset = workspaceOverviewLogicalOffset(workspaceIdx, ACTIVEIDX, FINALPITCH);
                     found = true;
                     break;
                 }
@@ -5525,7 +5810,7 @@ void CScrollOverview::onWorkspaceChange() {
 
     std::vector<WORKSPACEID> previousWorkspaceIDs;
     previousWorkspaceIDs.reserve(images.size());
-    std::unordered_map<WORKSPACEID, float> previousWorkspaceOffsets;
+    std::unordered_map<WORKSPACEID, Vector2D> previousWorkspaceOffsets;
     const auto PREVIOUSLOGICALPITCH = getWorkspaceLogicalPitch(pMonitor.lock(), scale->value(), layout);
     for (size_t i = 0; i < images.size(); ++i) {
         const auto& image = images[i];
@@ -5560,10 +5845,10 @@ void CScrollOverview::onWorkspaceChange() {
         workspaceInsertFadeProgress->setConfig(INSERTEDWORKSPACE ? workspaceInsertFadeConfig : workspaceRemoveFadeConfig);
         workspaceInsertTransition.oldRelativeOffsets.clear();
         workspaceInsertTransition.newRelativeOffsets.clear();
-        workspaceInsertTransition.transitionOldRelativeOffset = 0.F;
+        workspaceInsertTransition.transitionOldRelativeOffset = Vector2D{};
 
         for (size_t i = 0; i < previousWorkspaceIDs.size(); ++i) {
-            const auto OFFSET = previousWorkspaceOffsets.contains(previousWorkspaceIDs[i]) ? previousWorkspaceOffsets.at(previousWorkspaceIDs[i]) : 0.F;
+            const auto OFFSET = previousWorkspaceOffsets.contains(previousWorkspaceIDs[i]) ? previousWorkspaceOffsets.at(previousWorkspaceIDs[i]) : Vector2D{};
             workspaceInsertTransition.oldRelativeOffsets.emplace(previousWorkspaceIDs[i], OFFSET);
             if (REMOVEDPREVIOUSWORKSPACE && previousWorkspaceIDs[i] == REMOVEDWORKSPACE->m_id)
                 workspaceInsertTransition.transitionOldRelativeOffset = OFFSET;
@@ -5590,14 +5875,14 @@ void CScrollOverview::onWorkspaceChange() {
         workspaceInsertFadeProgress->setConfig(workspaceInsertFadeConfig);
         workspaceInsertTransition.oldRelativeOffsets.clear();
         workspaceInsertTransition.newRelativeOffsets.clear();
-        workspaceInsertTransition.transitionOldRelativeOffset = 0.F;
+        workspaceInsertTransition.transitionOldRelativeOffset = Vector2D{};
         workspaceInsertProgress->setValueAndWarp(1.F);
         workspaceInsertFadeProgress->setValueAndWarp(1.F);
         if (GESTURESETTLE) // a trackpad follow committed this change: settle from the drag position, not a full pitch
             viewOffset->setValueAndWarp(axisOffsetVector(sc<float>(GESTURESETTLEOFFSET), layout));
         else
             viewOffset->setValueAndWarp(
-            axisOffsetVector(workspaceOverviewLogicalOffset(previousActiveIdx, viewportCurrentWorkspace, getWorkspaceLogicalPitch(pMonitor.lock(), scale->value(), layout)), layout));
+            workspaceOverviewLogicalOffset(previousActiveIdx, viewportCurrentWorkspace, getWorkspaceLogicalPitch(pMonitor.lock(), scale->value(), layout)));
         *viewOffset = Vector2D{};
     }
 
@@ -5667,7 +5952,8 @@ void CScrollOverview::render() {
             if (WALLPAPERMODE != 0)
                 renderWallpaperLayers(MONITOR, GHOSTBOX, SCALE, NOW, GHOSTALPHA);
 
-            renderOverviewLayerLevel(MONITOR, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, GHOSTBOX, SCALE, NOW);
+                renderOverviewLayerLevel(MONITOR, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, GHOSTBOX, SCALE, NOW, 1.F,
+                                         layout == ScrollOverview::Config::ELayout::COMPASS ? getCompassTileRadius(MONITOR, SCALE) : 0);
         }
     }
 
@@ -5684,12 +5970,82 @@ void CScrollOverview::render() {
         renderWorkspaceLive(MONITOR, workspaceIdx, ACTIVEIDX, PITCH, SCALE, WALLPAPERMODE, NOW);
     }
 
+    if (layout == ScrollOverview::Config::ELayout::COMPASS) {
+        const auto drawLabel = [&](const CBox& box, const std::string& text, float fontRatio, bool centered) {
+            const int FONT = std::max(18, sc<int>(box.width * fontRatio));
+            const auto TEX = g_pHyprRenderer->renderText(text, CHyprColor{1.F, 1.F, 1.F, 0.94F}, FONT, false, "", 0, 600);
+            if (!TEX || !TEX->ok())
+                return;
+            const float MARGIN = std::max(10.F, sc<float>(ScrollOverview::Config::getTileRadius(MONITOR)) * SCALE * MONITOR->m_scale);
+            CBox TEXTBOX{box.x + MARGIN, box.y + box.height - TEX->m_size.y - MARGIN, TEX->m_size.x, TEX->m_size.y};
+            if (centered) {
+                TEXTBOX.x = box.x + (box.width - TEX->m_size.x) / 2.F;
+                TEXTBOX.y = box.y + (box.height - TEX->m_size.y) / 2.F;
+            }
+            CTexPassElement::SRenderData DATA;
+            DATA.tex = TEX;
+            DATA.box = TEXTBOX.round();
+            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(DATA));
+        };
+        for (size_t i = 0; i < images.size(); ++i) {
+            if (!ScrollOverview::Config::getShowNumbers(MONITOR) || !images[i] || !images[i]->pWorkspace)
+                continue;
+            const auto BOX = getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), workspaceOverviewOffset(i, ACTIVEIDX, PITCH), layout);
+            if (overviewBoxIntersectsMonitor(BOX, MONITOR))
+                drawLabel(BOX, std::to_string(images[i]->pWorkspace->m_id), 0.18F, false);
+        }
+        // Ring the tile holding the selected window, in this top pass like the slot ring: a ring
+        // drawn with the window sits under the tile clip and never shows.
+        if (!compassSlotSelected) {
+            size_t     selIdx = viewportCurrentWorkspace;
+            const auto SEL    = getOverviewWindowToShow(closeOnWindow.lock());
+            if (SEL) {
+                for (size_t i = 0; i < images.size(); ++i) {
+                    if (images[i] && images[i]->pWorkspace == SEL->m_workspace) {
+                        selIdx = i;
+                        break;
+                    }
+                }
+            }
+            if (selIdx < images.size()) {
+                const auto BOX = getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), workspaceOverviewOffset(selIdx, ACTIVEIDX, PITCH), layout);
+                if (overviewBoxIntersectsMonitor(BOX, MONITOR)) {
+                    const int WIDTH = std::max(3, sc<int>(std::round(6.F * MONITOR->m_scale * SCALE)));
+                    CBorderPassElement::SBorderData RING;
+                    RING.box = BOX.copy().expand(WIDTH / 2.F);
+                    RING.grad1 = Config::CGradientValueData{CHyprColor{169.F / 255.F, 227.F / 255.F, 180.F / 255.F, 1.F}};
+                    RING.round = getCompassTileRadius(MONITOR, SCALE) + WIDTH / 2;
+                    RING.outerRound = RING.round + WIDTH;
+                    RING.borderSize = WIDTH;
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(RING));
+                }
+            }
+        }
+        if (ScrollOverview::Config::getEmptySlot(MONITOR)) {
+            const auto BOX = getOverviewWorkspaceBox(MONITOR, SCALE, viewOffset->value(), workspaceOverviewOffset(images.size(), ACTIVEIDX, PITCH), layout);
+            if (overviewBoxIntersectsMonitor(BOX, MONITOR)) {
+                renderCompassTileOutline(MONITOR, BOX, SCALE);
+                drawLabel(BOX, "+", 0.2F, true);
+                if (compassSlotSelected) {
+                    const int WIDTH = std::max(1, sc<int>(std::round(6.F * MONITOR->m_scale * SCALE)));
+                    CBorderPassElement::SBorderData RING;
+                    RING.box = BOX.copy().expand(WIDTH / 2.F);
+                    RING.grad1 = Config::CGradientValueData{CHyprColor{169.F / 255.F, 227.F / 255.F, 180.F / 255.F, 1.F}};
+                    RING.round = getCompassTileRadius(MONITOR, SCALE) + WIDTH / 2;
+                    RING.outerRound = RING.round + WIDTH;
+                    RING.borderSize = WIDTH;
+                    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(RING));
+                }
+            }
+        }
+    }
+
     renderDraggedWindow(MONITOR, ACTIVEIDX, PITCH, SCALE, NOW);
     renderPinnedFloatingWindows(MONITOR, SCALE, NOW);
 
     for (const auto LAYER : {ZWLR_LAYER_SHELL_V1_LAYER_TOP, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY}) {
         for (auto const& ls : MONITOR->m_layerSurfaceLayers[LAYER]) {
-            if (!Desktop::View::validMapped(ls.lock()))
+            if (!Desktop::View::validMapped(ls.lock()) || ScrollOverview::Config::isLayerHidden(MONITOR, ls->m_namespace))
                 continue;
 
             g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW);
@@ -5701,7 +6057,7 @@ void CScrollOverview::render() {
     // overview. render() fully replaces Hyprland's renderAllClientsForWorkspace
     // path, which would otherwise draw this layer.
     for (auto const& ls : MONITOR->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]) {
-        if (!Desktop::View::validMapped(ls.lock()))
+        if (!Desktop::View::validMapped(ls.lock()) || ScrollOverview::Config::isLayerHidden(MONITOR, ls->m_namespace))
             continue;
 
         g_pHyprRenderer->renderLayer(ls.lock(), MONITOR, NOW);

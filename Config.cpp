@@ -66,9 +66,9 @@ SDispatcher* findDispatcher(const std::string_view name) {
         },
         {
             .name            = "navigate",
-            .argPattern      = std::regex{"^(left|right|up|down)$"},
+            .argPattern      = std::regex{"^(left|right|up|down|next|prev)$"},
             .typeArgError    = "expected a string argument",
-            .invalidArgError = "expected one of: left, right, up, down",
+            .invalidArgError = "expected one of: left, right, up, down, next, prev",
             .luaFunction     = [](lua_State* L) { return dispatcherFactoryLua(L, "navigate"); },
         },
         {
@@ -406,6 +406,10 @@ static void defineConfigValues() {
     addValue(makeShared<CFloatValue>("plugin:scrolloverview:scale", "overview scale", 0.5F, SFloatValueOptions{.min = 0.1F, .max = 0.9F}));
     addValue(makeShared<CIntValue>("plugin:scrolloverview:workspace_gap", "gap between overview workspaces", 0, SIntValueOptions{.min = 0}));
     addValue(makeShared<CStringValue>("plugin:scrolloverview:layout", "overview layout", Hyprlang::STRING{"vertical"}));
+    addValue(makeShared<CIntValue>("plugin:scrolloverview:compass_columns", "workspace columns in compass layout (0 = automatic)", 0, SIntValueOptions{.min = 0}));
+    addValue(makeShared<CIntValue>("plugin:scrolloverview:tile_radius", "workspace tile corner radius at full size", 24, SIntValueOptions{.min = 0}));
+    addValue(makeShared<CBoolValue>("plugin:scrolloverview:show_numbers", "show workspace numbers in overview tiles", true));
+    addValue(makeShared<CBoolValue>("plugin:scrolloverview:empty_slot", "show an empty workspace slot in compass layout", true));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:cross_monitor_drag", "enable cross-monitor window dragging", false));
     addValue(makeShared<CIntValue>("plugin:scrolloverview:input:scroll_event_delay", "minimum delay (ms) between discrete scroll steps (wheel workspace nav and trackpad focus stepping)", 200, SIntValueOptions{.min = 0}));
     addValue(makeShared<CFloatValue>("plugin:scrolloverview:input:touchpad_scroll_factor", "overview touchpad scroll factor", 1.F,
@@ -423,6 +427,7 @@ static void defineConfigValues() {
     // setups (dots-hyprland) whose layer surface isn't stable to sample.
     addValue(makeShared<CStringValue>("plugin:scrolloverview:wallpaper_path", "path to a static image used as the overview backdrop", Hyprlang::STRING{""}));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:blur", "blur the overview wallpaper", false));
+    addValue(makeShared<CStringValue>("plugin:scrolloverview:hide_layers", "comma-separated layer namespaces not drawn while the overview is open", Hyprlang::STRING{""}));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:shadow:enabled", "draw a shadow around each workspace card", false));
     addValue(makeShared<CIntValue>("plugin:scrolloverview:shadow:range", "workspace card shadow range", -1));
     addValue(makeShared<CIntValue>("plugin:scrolloverview:shadow:render_power", "workspace card shadow render power", -1));
@@ -449,17 +454,32 @@ int getGestureDistance(PHLMONITOR monitor) {
 }
 
 float getScale(PHLMONITOR monitor) {
-    return std::clamp(getValue<float>("plugin:scrolloverview:scale", monitor), 0.1F, 0.9F);
+    const auto SCALE = getValue<float>("plugin:scrolloverview:scale", monitor);
+    const auto LAYOUT = getValue<std::string>("plugin:scrolloverview:layout", monitor);
+    return std::clamp(LAYOUT == "compass" && std::abs(SCALE - 0.5F) < 0.0001F ? 0.38F : SCALE, 0.1F, 0.9F);
 }
 
+int getCompassColumns(PHLMONITOR monitor) { return std::max(0, getValue<int>("plugin:scrolloverview:compass_columns", monitor)); }
+int getTileRadius(PHLMONITOR monitor) { return std::max(0, getValue<int>("plugin:scrolloverview:tile_radius", monitor)); }
+bool getShowNumbers(PHLMONITOR monitor) { return getValue<bool>("plugin:scrolloverview:show_numbers", monitor); }
+bool getEmptySlot(PHLMONITOR monitor) { return getValue<bool>("plugin:scrolloverview:empty_slot", monitor); }
+
 int getWorkspaceGap(PHLMONITOR monitor) {
-    return std::max<int>(0, getValue<int>("plugin:scrolloverview:workspace_gap", monitor));
+    const auto GAP = std::max<int>(0, getValue<int>("plugin:scrolloverview:workspace_gap", monitor));
+    const auto LAYOUT = getValue<std::string>("plugin:scrolloverview:layout", monitor);
+    if (LAYOUT == "compass" && GAP == 0 && monitor) {
+        const auto SCALE = getValue<float>("plugin:scrolloverview:scale", monitor);
+        return sc<int>(monitor->m_size.x * 0.25 * (std::abs(SCALE - 0.5F) < 0.0001F ? 0.38F : SCALE));
+    }
+    return GAP;
 }
 
 ELayout getLayout(PHLMONITOR monitor) {
     const auto LAYOUT = getValue<std::string>("plugin:scrolloverview:layout", monitor);
     if (LAYOUT == "auto")
         return ELayout::AUTO;
+    if (LAYOUT == "compass")
+        return ELayout::COMPASS;
 
     return LAYOUT == "horizontal" ? ELayout::HORIZONTAL : ELayout::VERTICAL;
 }
@@ -527,6 +547,30 @@ int getWallpaperMode(PHLMONITOR monitor) {
 
 std::string getWallpaperPath(PHLMONITOR monitor) {
     return getValue<std::string>("plugin:scrolloverview:wallpaper_path", monitor);
+}
+
+bool isLayerHidden(PHLMONITOR monitor, const std::string& layerNamespace) {
+    if (layerNamespace.empty())
+        return false;
+
+    const std::string LIST = getValue<std::string>("plugin:scrolloverview:hide_layers", monitor);
+    size_t            start = 0;
+    while (start <= LIST.size()) {
+        size_t end = LIST.find(',', start);
+        if (end == std::string::npos)
+            end = LIST.size();
+
+        size_t first = start, last = end;
+        while (first < last && std::isspace(sc<unsigned char>(LIST[first])))
+            ++first;
+        while (last > first && std::isspace(sc<unsigned char>(LIST[last - 1])))
+            --last;
+
+        if (last > first && LIST.compare(first, last - first, layerNamespace) == 0)
+            return true;
+        start = end + 1;
+    }
+    return false;
 }
 
 bool getBlur(PHLMONITOR monitor) {

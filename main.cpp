@@ -88,7 +88,9 @@ bool ensureScrollOverviewHooks() {
 
     bool success = g_pScrollRenderWorkspaceHook->hook();
     success      = success && g_pScrollScheduleFrameHook->hook();
-    success      = success && g_pScrollDamageSurfaceHook->hook();
+    // damageSurface only filters damage; another plugin (hyprglass) may own it.
+    if (success)
+        g_pScrollDamageSurfaceHook->hook();
     success      = success && g_pScrollSendFrameEventsHook->hook();
     success      = success && g_pScrollSurfaceFrameHook->hook();
     success      = success && g_pScrollAddDamageHookA->hook();
@@ -330,7 +332,8 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
     const auto [ACTION, TARGET] = splitOverviewArg(arg);
 
     if (ACTION == "select") {
-        const auto OVERVIEW = scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
+        const auto ACTIVE = activeScrollOverview();
+        const auto OVERVIEW = ACTIVE ? ACTIVE : scrollOverviewAt(g_pInputManager->getMouseCoordsInternal());
         if (OVERVIEW && OVERVIEW->m_isSwiping)
             return {.success = false, .error = "already swiping"};
         if (OVERVIEW)
@@ -393,8 +396,14 @@ static SDispatchResult onNavigateDispatcher(std::string arg) {
     if (!OVERVIEW)
         return {};
 
+    if (arg == "next" || arg == "prev") {
+        if (const auto SCROLL = dc<CScrollOverview*>(OVERVIEW.get()))
+            SCROLL->cycleSelection(arg == "next");
+        return {};
+    }
+
     if (arg != "left" && arg != "right" && arg != "up" && arg != "down")
-        return {.success = false, .error = "invalid arg. expected left|right|up|down"};
+        return {.success = false, .error = "invalid arg. expected left|right|up|down|next|prev"};
 
     OVERVIEW->moveSelection(arg);
     return {};

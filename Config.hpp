@@ -22,6 +22,7 @@ enum class ELayout {
     VERTICAL,
     HORIZONTAL,
     AUTO,
+    COMPASS,
 };
 
 enum class EScrollAction {
@@ -99,6 +100,10 @@ void setValue(const std::string& name, const T& value) {
 
 int           getGestureDistance(PHLMONITOR monitor);
 float         getScale(PHLMONITOR monitor);
+int           getCompassColumns(PHLMONITOR monitor);
+int           getTileRadius(PHLMONITOR monitor);
+bool          getShowNumbers(PHLMONITOR monitor);
+bool          getEmptySlot(PHLMONITOR monitor);
 int           getWorkspaceGap(PHLMONITOR monitor);
 ELayout       getLayout(PHLMONITOR monitor);
 bool          getCrossMonitorDrag(PHLMONITOR monitor);
@@ -112,6 +117,7 @@ EScrollAction getHorizontalScrollAction(ELayout layout, PHLMONITOR monitor, bool
 int           getWallpaperMode(PHLMONITOR monitor);
 bool          getBlur(PHLMONITOR monitor);
 std::string   getWallpaperPath(PHLMONITOR monitor);
+bool          isLayerHidden(PHLMONITOR monitor, const std::string& layerNamespace);
 ::Config::CCssGapData getCssGapData(const std::string& name);
 int          getShadowEnabled(PHLMONITOR monitor);
 int          getShadowRange(PHLMONITOR monitor);

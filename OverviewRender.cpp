@@ -8,11 +8,11 @@
 namespace OverviewRender {
 
 void flushPass(PHLMONITOR monitor) {
-    if (!monitor || g_pHyprRenderer->m_renderPass.empty())
+    if (!monitor || g_pHyprRenderer->context().m_pass.empty())
         return;
 
-    g_pHyprRenderer->m_renderPass.render(CRegion{CBox{{}, monitor->m_transformedSize}});
-    g_pHyprRenderer->m_renderPass.clear();
+    g_pHyprRenderer->context().m_pass.render(g_pHyprRenderer->context(), CRegion{CBox{{}, monitor->m_transformedSize}});
+    g_pHyprRenderer->context().m_pass.clear();
 }
 
 void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {
@@ -30,7 +30,7 @@ void queueBlur(const CBox& box, int rounding, float roundingPower, float alpha, 
     data.blur          = true;
     data.blurA         = alpha;
     data.xray          = usePrecomputedBlur;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    g_pHyprRenderer->context().m_pass.add(makeUnique<CRectPassElement>(data));
 }
 
 void renderBlur(PHLMONITOR monitor, const CBox& box, int rounding, float roundingPower, float alpha, bool usePrecomputedBlur) {

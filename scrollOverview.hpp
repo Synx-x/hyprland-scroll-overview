@@ -20,6 +20,8 @@
 #include "DropIndicator.hpp"
 #include "IOverview.hpp"
 
+using WORKSPACEID = std::string;
+
 class CMonitor;
 namespace Render {
     class ITexture;
@@ -202,7 +204,7 @@ class CScrollOverview : public IOverview {
 
     struct SWorkspaceInsertTransition {
         bool                             active              = false;
-        WORKSPACEID                      transitionWorkspaceID = WORKSPACE_INVALID;
+        WORKSPACEID                      transitionWorkspaceID;
         bool                             transitionFadeIn   = true;
         std::unordered_map<WORKSPACEID, Vector2D> oldRelativeOffsets;
         std::unordered_map<WORKSPACEID, Vector2D> newRelativeOffsets;
@@ -233,7 +235,7 @@ class CScrollOverview : public IOverview {
     CBox                             dragOriginalOverviewBox    = CBox{};
     CBox                             dragOriginalOverviewHitbox = CBox{};
     CBox                             resizeOriginalBox          = CBox{};
-    WORKSPACEID                      focusSyncedFromWorkspaceID = WORKSPACE_INVALID;
+    WORKSPACEID                      focusSyncedFromWorkspaceID;
     size_t                           resizeWorkspaceIdx     = 0;
     Layout::eRectCorner              resizeCorner           = Layout::CORNER_NONE;
     bool                             dragPendingPrimary    = false;

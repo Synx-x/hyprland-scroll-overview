@@ -3,19 +3,21 @@
 #include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
 
+CRegion roundedRectRegion(const CBox& box, int rounding, float roundingPower);
+
 class CScrollOverviewPassElement : public IPassElement {
   public:
     CScrollOverviewPassElement();
     ~CScrollOverviewPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "CScrollOverviewPassElement";
@@ -40,14 +42,14 @@ class COverviewShadowPassElement : public IPassElement {
     COverviewShadowPassElement(const SData& data_);
     ~COverviewShadowPassElement() override = default;
 
-    std::vector<UP<IPassElement>> draw() override;
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override;
     ePassElementType              type() override {
         return EK_CUSTOM;
     }
-    bool                          needsLiveBlur() override;
-    bool                          needsPrecomputeBlur() override;
-    std::optional<CBox>           boundingBox() override;
-    CRegion                       opaqueRegion() override;
+    bool                          needsLiveBlur(Render::CRenderContext& ctx) override;
+    bool                          needsPrecomputeBlur(Render::CRenderContext& ctx) override;
+    std::optional<CBox>           boundingBox(Render::CRenderContext& ctx) override;
+    CRegion                       opaqueRegion(Render::CRenderContext& ctx) override;
 
     const char*                   passName() override {
         return "COverviewShadowPassElement";

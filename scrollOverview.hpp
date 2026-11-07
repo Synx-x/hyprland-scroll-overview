@@ -62,6 +62,7 @@ class CScrollOverview : public IOverview {
     bool         cycleSelection(bool forward);
     void         toggleLayout();
     bool         activateCompassSlot();
+    bool         isCompassSlotSelected() const { return compassSlotSelected; }
     bool         windowDispatcherAction(const std::string& action) override;
 
     void         fullRender() override;

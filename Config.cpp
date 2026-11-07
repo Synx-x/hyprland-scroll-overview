@@ -406,6 +406,7 @@ static void defineConfigValues() {
     addValue(makeShared<CIntValue>("plugin:scrolloverview:tile_radius", "workspace tile corner radius at full size", 24, SIntValueOptions{.min = 0}));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:show_numbers", "show workspace numbers in overview tiles", true));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:empty_slot", "show an empty workspace slot in compass layout", true));
+    addValue(makeShared<CBoolValue>("plugin:scrolloverview:tab_new_workspace", "Tab cycles through the new-workspace slot after the last window, then wraps to the first", false));
     addValue(makeShared<CBoolValue>("plugin:scrolloverview:cross_monitor_drag", "enable cross-monitor window dragging", false));
     addValue(makeShared<CIntValue>("plugin:scrolloverview:input:scroll_event_delay", "minimum delay (ms) between discrete scroll steps (wheel workspace nav and trackpad focus stepping)", 200, SIntValueOptions{.min = 0}));
     addValue(makeShared<CFloatValue>("plugin:scrolloverview:input:touchpad_scroll_factor", "overview touchpad scroll factor", 1.F,
@@ -459,6 +460,7 @@ int getCompassColumns(PHLMONITOR monitor) { return std::max(0, getValue<int>("pl
 int getTileRadius(PHLMONITOR monitor) { return std::max(0, getValue<int>("plugin:scrolloverview:tile_radius", monitor)); }
 bool getShowNumbers(PHLMONITOR monitor) { return getValue<bool>("plugin:scrolloverview:show_numbers", monitor); }
 bool getEmptySlot(PHLMONITOR monitor) { return getValue<bool>("plugin:scrolloverview:empty_slot", monitor); }
+bool getTabNewWorkspace(PHLMONITOR monitor) { return getValue<bool>("plugin:scrolloverview:tab_new_workspace", monitor); }
 
 int getWorkspaceGap(PHLMONITOR monitor) {
     const auto GAP = std::max<int>(0, getValue<int>("plugin:scrolloverview:workspace_gap", monitor));

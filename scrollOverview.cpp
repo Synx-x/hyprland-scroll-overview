@@ -4098,7 +4098,22 @@ size_t CScrollOverview::dragWorkspaceIndex(PHLWINDOW window) const {
 }
 
 bool CScrollOverview::cycleSelection(bool forward) {
+    const auto MONITOR  = pMonitor.lock();
+    const bool SLOTTAB  = layout == ScrollOverview::Config::ELayout::COMPASS && MONITOR && ScrollOverview::Config::getEmptySlot(MONITOR) &&
+        ScrollOverview::Config::getTabNewWorkspace(MONITOR);
+    const bool WASSLOT  = compassSlotSelected;
     compassSlotSelected = false;
+
+    // Tab walks windows, then the new-workspace slot, then wraps to the first window.
+    const auto selectSlot = [&]() {
+        compassSlotSelected = true;
+        const auto SLOT = workspaceOverviewLogicalOffset(images.size(), activeWorkspaceIndex(), getWorkspaceLogicalPitch(MONITOR, scale->value(), layout));
+        viewOffset->setValueAndWarp(viewOffset->value());
+        *viewOffset = SLOT;
+        closeOnWindow.reset();
+        damage();
+        return true;
+    };
     struct SStop {
         size_t    workspaceIdx;
         PHLWINDOW window;
@@ -4130,12 +4145,18 @@ bool CScrollOverview::cycleSelection(bool forward) {
     }
 
     if (stops.empty())
-        return false;
+        return SLOTTAB ? selectSlot() : false;
 
     const auto CURRENT = getOverviewWindowToShow(closeOnWindow.lock());
     size_t     target  = stops.size();
-    for (size_t i = 0; i < stops.size(); ++i) {
+    // leaving the slot: forward wraps to the first window, backward to the last
+    const bool LEFTSLOT = SLOTTAB && WASSLOT;
+    if (LEFTSLOT)
+        target = forward ? 0 : stops.size() - 1;
+    for (size_t i = 0; !LEFTSLOT && i < stops.size(); ++i) {
         if (stops[i].window == CURRENT) {
+            if (SLOTTAB && ((forward && i + 1 == stops.size()) || (!forward && i == 0)))
+                return selectSlot();
             target = forward ? (i + 1) % stops.size() : (i + stops.size() - 1) % stops.size();
             break;
         }
@@ -4160,6 +4181,10 @@ bool CScrollOverview::cycleSelection(bool forward) {
         if (pMonitor && IMAGE && IMAGE->pWorkspace && pMonitor->m_activeWorkspace != IMAGE->pWorkspace)
             pMonitor->changeWorkspace(IMAGE->pWorkspace, false, true, true);
     }
+
+    // Leaving the new-workspace slot: pan the board back to centre on the workspace now in focus.
+    if (LEFTSLOT)
+        *viewOffset = Vector2D{};
 
     closeOnWindow = STOP.window;
     rememberSelection(STOP.window);

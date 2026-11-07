@@ -104,6 +104,7 @@ int           getCompassColumns(PHLMONITOR monitor);
 int           getTileRadius(PHLMONITOR monitor);
 bool          getShowNumbers(PHLMONITOR monitor);
 bool          getEmptySlot(PHLMONITOR monitor);
+bool          getTabNewWorkspace(PHLMONITOR monitor);
 int           getWorkspaceGap(PHLMONITOR monitor);
 ELayout       getLayout(PHLMONITOR monitor);
 bool          getCrossMonitorDrag(PHLMONITOR monitor);

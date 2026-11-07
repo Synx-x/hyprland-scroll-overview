@@ -353,6 +353,11 @@ static SDispatchResult onOverviewDispatcher(std::string arg) {
 
     if (ACTION == "off" || ACTION == "close" || ACTION == "disable") {
         if (TARGET.empty() || TARGET == "all") {
+            // Releasing Alt while Tab has the new-workspace slot selected opens that workspace.
+            if (ACTIVE && !ACTIVE->isClosing()) {
+                if (const auto SCROLL = dc<CScrollOverview*>(ACTIVE.get()); SCROLL && SCROLL->isCompassSlotSelected() && SCROLL->activateCompassSlot())
+                    return {};
+            }
             closeAll();
             return {};
         }
